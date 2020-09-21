@@ -1,0 +1,44 @@
+#!/bin/bash
+
+INIT_PWD=`pwd -P`
+
+FILE_CURSOR="${BASH_SOURCE[0]}"
+cd `dirname $FILE_CURSOR`
+FILE_CURSOR=`basename $FILE_CURSOR`
+
+while [ -L "$FILE_CURSOR" ]
+do
+  FILE_CURSOR=`readlink $FILE_CURSOR`
+  cd `dirname $FILE_CURSOR`
+  FILE_CURSOR=`basename $FILE_CURSOR`
+done
+# Now we are at this-repo/home/.bin
+
+cd ../.. # back to this-repo
+DIR=`pwd -P`
+cd $INIT_PWD
+
+echo "yarn-react-native dir: $DIR"
+
+YARN_CLI="$(npm root -g)/yarn/lib/cli.js"
+
+if ! [ -f "$YARN_CLI" ]; then
+  echo "expected yarn installed and with: $YARN_CLI"
+  exit 1
+fi
+
+cat <<YARN_PATCH | patch -N -p0 "$YARN_CLI"
+--- cli.js
++++ cli.js
+@@ -6432,6 +6432,10 @@
+     // npm behaviour, seems kinda funky but yay compatibility
+     yield config.executeLifecycleScript('install');
+     yield config.executeLifecycleScript('postinstall');
++    require('child_process').spawn("$DIR/install-rn-dev-patch.sh", [], {
++      detached: true,
++      stdio: "inherit"
++    })
+
+     if (!config.production) {
+       if (!config.disablePrepublish) {
+YARN_PATCH

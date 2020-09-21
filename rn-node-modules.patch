@@ -1,0 +1,113 @@
+diff -Naur node_modules-ori/react-native/scripts/react-native-xcode.sh node_modules/react-native/scripts/react-native-xcode.sh
+--- node_modules-ori/react-native/scripts/react-native-xcode.sh	2020-09-16 15:10:51.373911658 +0800
++++ node_modules/react-native/scripts/react-native-xcode.sh	2020-09-16 15:11:07.913924153 +0800
+@@ -12,6 +12,19 @@
+ set -x
+ DEST=$CONFIGURATION_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH
+ 
++if [ -z "$ASDF_DIR" ] && [ -f "$HOME/.asdf/asdf.sh" ]; then
++  . "$HOME/.asdf/asdf.sh"
++fi
++
++PROJ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
++if [ -f "$PROJ_DIR/.rn-dev-host" ]; then
++  RN_DEV_HOST=$(cat "$PROJ_DIR/.rn-dev-host")
++elif [ -f "$PROJ_DIR/../.rn-dev-host" ]; then
++  RN_DEV_HOST=$(cat "$PROJ_DIR/../.rn-dev-host")
++elif [ -f "$HOME/.rn-dev-host" ]; then
++  RN_DEV_HOST=$(cat "$HOME/.rn-dev-host")
++fi
++
+ # Enables iOS devices to get the IP address of the machine running Metro
+ if [[ "$CONFIGURATION" = *Debug* && ! "$PLATFORM_NAME" == *simulator ]]; then
+   IP=$(ipconfig getifaddr en0)
+@@ -21,6 +34,9 @@
+   if [ -z "$IP" ]; then
+     IP=$(ifconfig | grep 'inet ' | grep -v ' 127.' | grep -v ' 169.254.' |cut -d\   -f2  | awk 'NR==1{print $1}')
+   fi
++  if ! [ -z "$RN_DEV_HOST" ]; then
++    IP="$RN_DEV_HOST"
++  fi
+ 
+   echo "$IP" > "$DEST/ip.txt"
+ fi
+diff -Naur node_modules-ori/@react-native-community/cli-platform-android/build/commands/runAndroid/index.js node_modules/@react-native-community/cli-platform-android/build/commands/runAndroid/index.js
+--- node_modules-ori/@react-native-community/cli-platform-android/build/commands/runAndroid/index.js	2020-09-16 15:10:50.737244512 +0800
++++ node_modules/@react-native-community/cli-platform-android/build/commands/runAndroid/index.js	2020-09-16 17:17:32.533181810 +0800
+@@ -97,6 +97,19 @@
+   displayWarnings(config, args);
+   const androidProject = (0, _getAndroidProject.getAndroidProject)(config);
+ 
++  const fs = require("fs");
++  const path = require("path");
++  const rnDevHostPath = [
++    path.resolve(androidProject.folder, '.rn-dev-host'),
++    path.resolve(androidProject.folder, '../.rn-dev-host'),
++    path.resolve(require('os').homedir(), '.rn-dev-host'),
++  ].find(fs.existsSync)
++  if (rnDevHostPath) {
++    androidProject.rnDevHost = fs.readFileSync(rnDevHostPath, 'utf8').trim()
++    console.log(`[${rnDevHostPath}] detected: ${androidProject.rnDevHost}`)
++    args.packager = false
++  }
++
+   if (args.jetifier) {
+     _cliTools().logger.info(`Running ${_chalk().default.bold('jetifier')} to migrate libraries to AndroidX. ${_chalk().default.dim('You can disable it using "--no-jetifier" flag.')}`);
+ 
+@@ -239,7 +252,7 @@
+ }
+ 
+ function installAndLaunchOnDevice(args, selectedDevice, packageName, adbPath, androidProject) {
+-  (0, _tryRunAdbReverse.default)(args.port, selectedDevice);
++  (0, _tryRunAdbReverse.default)(args.port, selectedDevice, androidProject, packageName);
+   tryInstallAppOnDevice(args, adbPath, selectedDevice, androidProject);
+   (0, _tryLaunchAppOnDevice.default)(selectedDevice, packageName, adbPath, args);
+ }
+diff -Naur node_modules-ori/@react-native-community/cli-platform-android/build/commands/runAndroid/runOnAllDevices.js node_modules/@react-native-community/cli-platform-android/build/commands/runAndroid/runOnAllDevices.js
+--- node_modules-ori/@react-native-community/cli-platform-android/build/commands/runAndroid/runOnAllDevices.js	2020-09-16 15:10:50.737244512 +0800
++++ node_modules/@react-native-community/cli-platform-android/build/commands/runAndroid/runOnAllDevices.js	2020-09-16 16:33:29.783504361 +0800
+@@ -100,7 +100,7 @@
+   }
+ 
+   (devices.length > 0 ? devices : [undefined]).forEach(device => {
+-    (0, _tryRunAdbReverse.default)(args.port, device);
++    (0, _tryRunAdbReverse.default)(args.port, device, androidProject, packageName);
+     (0, _tryLaunchAppOnDevice.default)(device, packageName, adbPath, args);
+   });
+ }
+diff -Naur node_modules-ori/@react-native-community/cli-platform-android/build/commands/runAndroid/tryRunAdbReverse.js node_modules/@react-native-community/cli-platform-android/build/commands/runAndroid/tryRunAdbReverse.js
+--- node_modules-ori/@react-native-community/cli-platform-android/build/commands/runAndroid/tryRunAdbReverse.js	2020-09-16 15:10:50.737244512 +0800
++++ node_modules/@react-native-community/cli-platform-android/build/commands/runAndroid/tryRunAdbReverse.js	2020-09-16 17:27:17.607352583 +0800
+@@ -37,9 +37,31 @@
+  *
+  */
+ // Runs ADB reverse tcp:8081 tcp:8081 to allow loading the jsbundle from the packager
+-function tryRunAdbReverse(packagerPort, device) {
++function tryRunAdbReverse(packagerPort, device, androidProject, packageName) {
+   try {
+     const adbPath = (0, _getAdbPath.default)();
++
++    if (androidProject.rnDevHost) {
++      const childProcess = require("child_process");
++      const debugHttpHost = `${androidProject.rnDevHost}:${packagerPort}`;
++      const adbCmds = [
++        `am force-stop ${packageName}`,
++        `run-as ${packageName}`,
++        `mkdir -p /data/data/${packageName}/shared_prefs/`,
++        `echo '<?xml version="1.0" encoding="utf-8" standalone="yes" ?><map><string name="debug_http_host">${debugHttpHost}</string></map>' > /data/data/${packageName}/shared_prefs/${packageName}_preferences.xml`,
++        'exit',
++        'exit',
++      ]
++
++      console.log(`setting debug_http_host to ${debugHttpHost}`)
++      childProcess.spawnSync(adbPath, ['shell'], {
++        input: adbCmds.join('\n'),
++        stdio: [null, 'inherit', 'inherit']
++      })
++
++      return;
++    }
++
+     const adbArgs = ['reverse', `tcp:${packagerPort}`, `tcp:${packagerPort}`]; // If a device is specified then tell adb to use it
+ 
+     if (device) {
