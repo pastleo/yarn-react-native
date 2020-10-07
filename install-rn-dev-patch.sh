@@ -11,10 +11,13 @@ if [ -z "$node_modules_path" ]; then
   exit
 fi
 
-echo "node project detected"
-echo "node_modules_path: $node_modules_path"
 
 if ! [ -d "$node_modules_path/react-native" ]; then
+  exit
+fi
+
+patched_mark_file="$node_modules_path/react-native/rn-dev-patched"
+if [ -f "$patched_mark_file" ]; then
   exit
 fi
 
@@ -26,9 +29,9 @@ fi
 # diff -Naur node_modules-ori node_modules > $DIR/rn-node-modules.patch
 # rm -rf node_modules-ori
 
-echo "react-native project detected, applying patch...."
+echo "react-native project detected, rn-dev-patch not detected, applying..."
 cd "$node_modules_path/.."
 patch -N -p0 < "$DIR/rn-node-modules.patch"
-cd "$DIR"
+touch "$patched_mark_file"
 
 echo 'Done.'
